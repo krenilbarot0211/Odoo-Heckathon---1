@@ -1,5 +1,9 @@
 # Odoo Hackathon
 
+This is the repo for our Odoo hackathon virtual round.
+
+**Team:** Krenil Barot, Rahul Patel
+
 Full-stack application with a FastAPI backend and frontend.
 
 ## Project Structure
