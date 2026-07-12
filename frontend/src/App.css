@@ -204,10 +204,47 @@
   flex: 1;
 }
 
-.copilot-reply {
-  margin-top: 0.9rem;
-  color: #374151;
-  line-height: 1.5;
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-history {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 0.9rem;
+  padding-right: 0.25rem;
+}
+
+.chat-bubble {
+  max-width: 85%;
+  padding: 0.6rem 0.85rem;
+  border-radius: 0.9rem;
+  line-height: 1.45;
+  font-size: 0.92rem;
+  color: #1f2937;
+}
+
+.chat-bubble-user {
+  align-self: flex-end;
+  background: #16241f;
+  color: #f0fdf4;
+  border-bottom-right-radius: 0.25rem;
+}
+
+.chat-bubble-assistant {
+  align-self: flex-start;
+  background: #eef2ef;
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 0.25rem;
+}
+
+.chat-bubble-loading {
+  font-style: italic;
+  color: #6b7280;
 }
 
 .error-text {

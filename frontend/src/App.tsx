@@ -72,6 +72,11 @@ type User = {
   permissions?: string[]
 }
 
+type ChatMessage = {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 type View = 'dashboard' | 'carbon' | 'csr' | 'governance'
 
 type AuthState = {
@@ -113,9 +118,11 @@ function App() {
   const [policies, setPolicies] = useState<Policy[]>([])
   const [report, setReport] = useState<Report | null>(null)
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null)
-  const [prompt, setPrompt] = useState('How can we improve our ESG score?')
-  const [reply, setReply] = useState('AI suggestions will appear here as soon as the backend responds.')
-  const [isLoading, setIsLoading] = useState(false)
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    { role: 'assistant', content: "Hi! I'm the EcoSphere AI Copilot. Ask me about emissions, CSR, compliance, or your ESG score." },
+  ])
+  const [chatInput, setChatInput] = useState('How can we improve our ESG score?')
+  const [isChatLoading, setIsChatLoading] = useState(false)
   const [auth, setAuth] = useState<AuthState>({ isAuthenticated: false, token: null, user: null, error: '' })
   const [loginForm, setLoginForm] = useState({ email: '', password: '' })
   const [registerForm, setRegisterForm] = useState({ name: '', email: '', password: '', role: 'employee' })
@@ -229,25 +236,38 @@ function App() {
     }
   }
 
-  const askCopilot = async (event: FormEvent) => {
+  const sendChatMessage = async (event: FormEvent) => {
     event.preventDefault()
-    setIsLoading(true)
+    const trimmed = chatInput.trim()
+    if (!trimmed || isChatLoading) return
+
+    const nextMessages: ChatMessage[] = [...chatMessages, { role: 'user', content: trimmed }]
+    setChatMessages(nextMessages)
+    setChatInput('')
+    setIsChatLoading(true)
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/ai/copilot', {
+      const response = await fetch('http://127.0.0.1:8000/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ messages: nextMessages }),
       })
 
       if (response.ok) {
         const data = await response.json()
-        setReply(data.reply)
+        setChatMessages((current) => [...current, { role: 'assistant', content: data.reply }])
+      } else {
+        const errorData = await response.json().catch(() => null)
+        const detail = errorData?.detail ?? 'The AI Copilot is currently unavailable.'
+        setChatMessages((current) => [...current, { role: 'assistant', content: detail }])
       }
     } catch {
-      setReply('The API is currently unavailable, so a fallback response is being shown instead.')
+      setChatMessages((current) => [
+        ...current,
+        { role: 'assistant', content: 'The API is currently unavailable, so no live response could be generated.' },
+      ])
     } finally {
-      setIsLoading(false)
+      setIsChatLoading(false)
     }
   }
 
@@ -444,18 +464,29 @@ function App() {
               </ul>
             </div>
 
-            <div className="panel">
+            <div className="panel chat-panel">
               <div className="panel-header">
                 <h3>AI Copilot</h3>
-                <span>Ask a question in plain English</span>
+                <span>Chat about emissions, compliance, or CSR</span>
               </div>
-              <form className="copilot-form" onSubmit={askCopilot}>
-                <input value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Ask about emissions, compliance, or CSR" />
-                <button type="submit" disabled={isLoading}>
-                  {isLoading ? 'Thinking…' : 'Ask AI'}
+              <div className="chat-history">
+                {chatMessages.map((message, index) => (
+                  <div key={index} className={`chat-bubble chat-bubble-${message.role}`}>
+                    {message.content}
+                  </div>
+                ))}
+                {isChatLoading ? <div className="chat-bubble chat-bubble-assistant chat-bubble-loading">Thinking…</div> : null}
+              </div>
+              <form className="copilot-form" onSubmit={sendChatMessage}>
+                <input
+                  value={chatInput}
+                  onChange={(event) => setChatInput(event.target.value)}
+                  placeholder="Ask about emissions, compliance, or CSR"
+                />
+                <button type="submit" disabled={isChatLoading || !chatInput.trim()}>
+                  {isChatLoading ? 'Thinking…' : 'Send'}
                 </button>
               </form>
-              <p className="copilot-reply">{reply}</p>
             </div>
           </section>
         </>

@@ -73,3 +73,72 @@ def add_policy(db: Session, title: str, description: str, version: str, status: 
 
 def list_policies(db: Session) -> list[Policy]:
     return db.query(Policy).all()
+
+
+def get_dashboard_summary(db: Session) -> dict:
+    """Compute real dashboard metrics from the database instead of static demo data."""
+    carbon_logs = db.query(CarbonLog).all()
+    csr_activities = db.query(CSRActivity).all()
+    policies = db.query(Policy).all()
+
+    total_emissions = round(sum(log.amount for log in carbon_logs), 1)
+    csr_count = len(csr_activities)
+    active_policies = len([p for p in policies if p.status == "active"])
+    policy_ratio = (active_policies / len(policies)) if policies else 0.0
+
+    # ESG sub-scores derived from real records (see project's default 40/30/30 weighting).
+    environmental_score = max(0.0, min(100.0, 100 - total_emissions / 5))
+    social_score = min(100.0, csr_count * 12.0)
+    governance_score = round(policy_ratio * 100, 1)
+    overall_score = round(
+        environmental_score * 0.4 + social_score * 0.3 + governance_score * 0.3, 1
+    )
+
+    department_counts: dict[str, int] = {}
+    for activity in csr_activities:
+        department_counts[activity.organizer] = department_counts.get(activity.organizer, 0) + 1
+
+    leaderboard = [
+        {"name": name, "score": min(100, 40 + count * 15)}
+        for name, count in sorted(department_counts.items(), key=lambda kv: kv[1], reverse=True)
+    ] or [{"name": "No CSR activity yet", "score": 0}]
+
+    return {
+        "summary": [
+            {
+                "label": "Overall ESG Score",
+                "value": f"{overall_score}/100",
+                "delta": "Live",
+                "tone": "positive" if overall_score >= 70 else "neutral",
+            },
+            {
+                "label": "Carbon Emissions",
+                "value": f"{total_emissions} units logged",
+                "delta": f"{len(carbon_logs)} entries",
+                "tone": "neutral",
+            },
+            {
+                "label": "CSR Activities",
+                "value": str(csr_count),
+                "delta": "Live",
+                "tone": "positive" if csr_count > 0 else "neutral",
+            },
+            {
+                "label": "Governance Status",
+                "value": f"{active_policies}/{len(policies)} active",
+                "delta": "Live",
+                "tone": "positive" if policy_ratio >= 0.5 else "neutral",
+            },
+        ],
+        "kpis": [
+            {"name": "Environmental Score", "value": round(environmental_score, 1), "target": 100},
+            {"name": "Social Score", "value": round(social_score, 1), "target": 100},
+            {"name": "Governance Score", "value": governance_score, "target": 100},
+        ],
+        "initiatives": [
+            "Log more carbon data to sharpen the environmental score",
+            "Add CSR activities to boost social score and leaderboard participation",
+            "Publish and activate policies to improve governance score",
+        ],
+        "leaderboard": leaderboard,
+    }
