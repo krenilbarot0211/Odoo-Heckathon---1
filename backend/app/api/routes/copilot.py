@@ -4,44 +4,33 @@ import httpx
 from fastapi import APIRouter, HTTPException
 
 from app.schemas.esg import ChatRequest, ChatResponse
+from app.services.ai_service import AIService
 
 router = APIRouter()
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-SYSTEM_PROMPT = (
-    "You are the EcoSphere AI Copilot, an assistant embedded in an ESG "
-    "(Environmental, Social, Governance) management platform. You help "
-    "sustainability managers, employees, and auditors understand ESG concepts, "
-    "carbon tracking, CSR programs, governance/compliance, and gamification "
-    "features, and you offer practical, concise recommendations. Keep answers "
-    "focused and actionable. If asked about specific live company data you "
-    "don't have access to yet, say so honestly instead of making numbers up."
-)
-
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="GROQ_API_KEY is not configured on the server. Add it to backend/.env to enable the AI Copilot.",
-        )
-
     if not request.messages:
         raise HTTPException(status_code=400, detail="At least one message is required.")
 
-    payload_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    payload_messages.extend({"role": m.role, "content": m.content} for m in request.messages)
+    service = AIService(provider_key=os.getenv("GROQ_API_KEY"))
+    payload_messages = service.build_payload_messages(
+        [{"role": m.role, "content": m.content} for m in request.messages]
+    )
+
+    if not service.provider_key:
+        return ChatResponse(reply=service.get_fallback_reply(request.messages[-1].content))
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 GROQ_API_URL,
                 headers={
-                    "Authorization": f"Bearer {api_key}",
+                    "Authorization": f"Bearer {service.provider_key}",
                     "Content-Type": "application/json",
                 },
                 json={

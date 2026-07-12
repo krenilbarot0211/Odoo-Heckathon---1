@@ -32,4 +32,10 @@ async def analytics_report() -> dict:
             {"month": "Jun", "value": 78},
         ],
         "governance_health": 94,
+        "challenge_completion_rate": 72,
+        "compliance_by_severity": [
+            {"severity": "High", "count": 3},
+            {"severity": "Medium", "count": 5},
+            {"severity": "Low", "count": 2},
+        ],
     }
