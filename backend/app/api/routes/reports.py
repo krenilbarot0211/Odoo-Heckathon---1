@@ -13,5 +13,23 @@ async def generate_report() -> ReportResponse:
         recommendations=[
             "Increase volunteer participation in underrepresented departments",
             "Expand rooftop solar projects for the next reporting cycle",
+            "Accelerate policy renewal reminders for high-risk teams",
         ],
     )
+
+
+@router.get("/analytics")
+async def analytics_report() -> dict:
+    return {
+        "emissions_trend": [
+            {"month": "Apr", "value": 13.6},
+            {"month": "May", "value": 12.9},
+            {"month": "Jun", "value": 12.4},
+        ],
+        "csr_trend": [
+            {"month": "Apr", "value": 54},
+            {"month": "May", "value": 63},
+            {"month": "Jun", "value": 78},
+        ],
+        "governance_health": 94,
+    }
