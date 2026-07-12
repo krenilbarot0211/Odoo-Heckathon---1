@@ -69,6 +69,7 @@ type User = {
   email: string
   role: string
   department: string | null
+  permissions?: string[]
 }
 
 type View = 'dashboard' | 'carbon' | 'csr' | 'governance'
@@ -116,7 +117,8 @@ function App() {
   const [reply, setReply] = useState('AI suggestions will appear here as soon as the backend responds.')
   const [isLoading, setIsLoading] = useState(false)
   const [auth, setAuth] = useState<AuthState>({ isAuthenticated: false, token: null, user: null, error: '' })
-  const [loginForm, setLoginForm] = useState({ email: 'ava@ecosphere.ai', password: 'demo123' })
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' })
+  const [registerForm, setRegisterForm] = useState({ name: '', email: '', password: '', role: 'employee' })
   const [carbonForm, setCarbonForm] = useState({ source: 'Electricity', amount: '320', unit: 'kWh', date: '2026-06-01' })
   const [csrForm, setCsrForm] = useState({ title: 'Community Tree Planting', description: 'Planting trees with local volunteers', location: 'Abuja', organizer: 'Operations' })
   const [policyForm, setPolicyForm] = useState({ title: 'Governance Charter', description: 'Updated compliance policy', version: 'v1.4', status: 'active' })
@@ -195,13 +197,36 @@ function App() {
       setAuth({ isAuthenticated: true, token: data.access_token, user: data.user, error: '' })
       void loadModuleData()
     } catch {
-      setAuth((current) => ({ ...current, error: 'Login failed. Please try the demo credentials.' }))
+      setAuth((current) => ({ ...current, error: 'Login failed. Please check your credentials.' }))
     }
   }
 
   const handleLogout = () => {
     setAuth({ isAuthenticated: false, token: null, user: null, error: '' })
     setView('dashboard')
+  }
+
+  const handleRegister = async (event: FormEvent) => {
+    event.preventDefault()
+    setAuth((current) => ({ ...current, error: '' }))
+
+    try {
+      const response = await fetch('http://127.0.0.1:8000/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(registerForm),
+      })
+
+      if (!response.ok) {
+        throw new Error('Registration failed')
+      }
+
+      const data = await response.json()
+      setAuth({ isAuthenticated: true, token: data.access_token, user: data.user, error: '' })
+      void loadModuleData()
+    } catch {
+      setAuth((current) => ({ ...current, error: 'Registration failed. Please try again.' }))
+    }
   }
 
   const askCopilot = async (event: FormEvent) => {
@@ -220,7 +245,7 @@ function App() {
         setReply(data.reply)
       }
     } catch {
-      setReply('The API is currently unavailable, so the demo response is being shown instead.')
+      setReply('The API is currently unavailable, so a fallback response is being shown instead.')
     } finally {
       setIsLoading(false)
     }
@@ -296,12 +321,10 @@ function App() {
 
       <section className="toolbar panel">
         <div>
-          <strong>{auth.user ? `Welcome back, ${auth.user.name}` : 'Demo mode'}</strong>
-          <p>{auth.user ? auth.user.role : 'Use ava@ecosphere.ai / demo123 to sign in.'}</p>
+          <strong>{auth.user ? `Welcome back, ${auth.user.name}` : 'Access your ESG workspace'}</strong>
+          <p>{auth.user ? auth.user.role : 'Sign in or create an account to continue.'}</p>
         </div>
-        {!auth.isAuthenticated ? (
-          <button className="secondary-btn" onClick={() => setView('dashboard')}>Continue as demo</button>
-        ) : (
+        {!auth.isAuthenticated ? null : (
           <button className="secondary-btn" onClick={handleLogout}>Log out</button>
         )}
       </section>
@@ -309,13 +332,26 @@ function App() {
       {!auth.isAuthenticated ? (
         <section className="panel login-panel">
           <div className="panel-header">
-            <h3>Sign in</h3>
-            <span>Access your ESG workspace</span>
+            <h3>Sign in or create a role-based account</h3>
+            <span>Admins, managers, employees, and auditors can each get a tailored workspace</span>
           </div>
           <form className="stack-form" onSubmit={handleLogin}>
             <input value={loginForm.email} onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })} placeholder="Email" />
             <input type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} placeholder="Password" />
             <button type="submit">Sign in</button>
+          </form>
+          <form className="stack-form" onSubmit={handleRegister}>
+            <input value={registerForm.name} onChange={(event) => setRegisterForm({ ...registerForm, name: event.target.value })} placeholder="Full name" />
+            <input value={registerForm.email} onChange={(event) => setRegisterForm({ ...registerForm, email: event.target.value })} placeholder="Email" />
+            <input type="password" value={registerForm.password} onChange={(event) => setRegisterForm({ ...registerForm, password: event.target.value })} placeholder="Password" />
+            <select value={registerForm.role} onChange={(event) => setRegisterForm({ ...registerForm, role: event.target.value })}>
+              <option value="administrator">Administrator</option>
+              <option value="esg_manager">ESG Manager</option>
+              <option value="department_manager">Department Manager</option>
+              <option value="employee">Employee</option>
+              <option value="auditor">Auditor</option>
+            </select>
+            <button type="submit">Create account</button>
           </form>
           {auth.error ? <p className="error-text">{auth.error}</p> : null}
         </section>
