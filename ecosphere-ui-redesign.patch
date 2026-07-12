@@ -1,0 +1,1835 @@
+diff --git a/backend/app/api/__init__.py b/backend/app/api/__init__.py
+index 27f3e32..479133e 100644
+--- a/backend/app/api/__init__.py
++++ b/backend/app/api/__init__.py
+@@ -1,5 +1,5 @@
+ from fastapi import APIRouter
+-from app.api.routes import auth, carbon, copilot, csr, governance, reports
++from app.api.routes import auth, carbon, copilot, csr, gamification, governance, reports
+ 
+ router = APIRouter(prefix="/api")
+ router.include_router(auth.router, prefix="/auth")
+@@ -7,4 +7,5 @@ router.include_router(carbon.router, prefix="/carbon")
+ router.include_router(csr.router, prefix="/csr")
+ router.include_router(governance.router, prefix="/governance")
+ router.include_router(reports.router, prefix="/reports")
++router.include_router(gamification.router, prefix="/gamification")
+ router.include_router(copilot.router, prefix="/ai")
+diff --git a/backend/app/api/routes/__init__.py b/backend/app/api/routes/__init__.py
+index 04a8115..5ef7ae8 100644
+--- a/backend/app/api/routes/__init__.py
++++ b/backend/app/api/routes/__init__.py
+@@ -1 +1 @@
+-from . import auth, carbon, csr, governance, reports
++from . import auth, carbon, csr, gamification, governance, reports
+diff --git a/backend/app/api/routes/gamification.py b/backend/app/api/routes/gamification.py
+new file mode 100644
+index 0000000..85ff814
+--- /dev/null
++++ b/backend/app/api/routes/gamification.py
+@@ -0,0 +1,11 @@
++from fastapi import APIRouter, Depends
++from sqlalchemy.orm import Session
++from app.database import get_db
++from app.services.db_service import get_gamification_summary
++
++router = APIRouter()
++
++
++@router.get("/summary")
++async def gamification_summary(db: Session = Depends(get_db)) -> dict:
++    return get_gamification_summary(db)
+diff --git a/backend/app/services/db_service.py b/backend/app/services/db_service.py
+index b47fd19..34afbef 100644
+--- a/backend/app/services/db_service.py
++++ b/backend/app/services/db_service.py
+@@ -75,6 +75,98 @@ def list_policies(db: Session) -> list[Policy]:
+     return db.query(Policy).all()
+ 
+ 
++def _department_leaderboard(csr_activities: list[CSRActivity]) -> list[dict]:
++    department_counts: dict[str, int] = {}
++    for activity in csr_activities:
++        department_counts[activity.organizer] = department_counts.get(activity.organizer, 0) + 1
++
++    return [
++        {"name": name, "score": min(100, 40 + count * 15)}
++        for name, count in sorted(department_counts.items(), key=lambda kv: kv[1], reverse=True)
++    ] or [{"name": "No CSR activity yet", "score": 0}]
++
++
++def get_gamification_summary(db: Session) -> dict:
++    """Derive XP, level, badges, challenges, and leaderboard from real ESG activity."""
++    carbon_logs = db.query(CarbonLog).all()
++    csr_activities = db.query(CSRActivity).all()
++    policies = db.query(Policy).all()
++    active_policies = [p for p in policies if p.status == "active"]
++
++    carbon_count = len(carbon_logs)
++    csr_count = len(csr_activities)
++    policy_count = len(active_policies)
++
++    xp = carbon_count * 10 + csr_count * 25 + policy_count * 40
++    xp_per_level = 150
++    level = xp // xp_per_level + 1
++    xp_into_level = xp % xp_per_level
++
++    badges = [
++        {
++            "name": "ESG Rookie",
++            "icon": "🌱",
++            "description": "Logged your first ESG action",
++            "unlocked": xp > 0,
++        },
++        {
++            "name": "Carbon Tracker",
++            "icon": "📉",
++            "description": "Logged 5+ carbon entries",
++            "unlocked": carbon_count >= 5,
++            "progress": min(100, round(carbon_count / 5 * 100)),
++        },
++        {
++            "name": "Community Champion",
++            "icon": "🤝",
++            "description": "Ran 3+ CSR activities",
++            "unlocked": csr_count >= 3,
++            "progress": min(100, round(csr_count / 3 * 100)),
++        },
++        {
++            "name": "Policy Guardian",
++            "icon": "🛡",
++            "description": "Published 2+ active policies",
++            "unlocked": policy_count >= 2,
++            "progress": min(100, round(policy_count / 2 * 100)),
++        },
++    ]
++
++    challenges = [
++        {
++            "name": "Zero Waste Week",
++            "icon": "🌳",
++            "description": "Log carbon data every day this week",
++            "progress": min(100, carbon_count * 15),
++            "reward_xp": 100,
++        },
++        {
++            "name": "Volunteer Sprint",
++            "icon": "🩸",
++            "description": "Organize or join 3 CSR activities",
++            "progress": min(100, round(csr_count / 3 * 100)),
++            "reward_xp": 150,
++        },
++        {
++            "name": "Compliance Streak",
++            "icon": "🏛",
++            "description": "Keep all policies active and up to date",
++            "progress": min(100, round((policy_count / len(policies)) * 100)) if policies else 0,
++            "reward_xp": 120,
++        },
++    ]
++
++    return {
++        "xp": xp,
++        "level": level,
++        "xp_into_level": xp_into_level,
++        "xp_per_level": xp_per_level,
++        "badges": badges,
++        "challenges": challenges,
++        "leaderboard": _department_leaderboard(csr_activities),
++    }
++
++
+ def get_dashboard_summary(db: Session) -> dict:
+     """Compute real dashboard metrics from the database instead of static demo data."""
+     carbon_logs = db.query(CarbonLog).all()
+@@ -94,14 +186,7 @@ def get_dashboard_summary(db: Session) -> dict:
+         environmental_score * 0.4 + social_score * 0.3 + governance_score * 0.3, 1
+     )
+ 
+-    department_counts: dict[str, int] = {}
+-    for activity in csr_activities:
+-        department_counts[activity.organizer] = department_counts.get(activity.organizer, 0) + 1
+-
+-    leaderboard = [
+-        {"name": name, "score": min(100, 40 + count * 15)}
+-        for name, count in sorted(department_counts.items(), key=lambda kv: kv[1], reverse=True)
+-    ] or [{"name": "No CSR activity yet", "score": 0}]
++    leaderboard = _department_leaderboard(csr_activities)
+ 
+     return {
+         "summary": [
+diff --git a/frontend/src/App.css b/frontend/src/App.css
+index fc8255a..5fd5c9c 100644
+--- a/frontend/src/App.css
++++ b/frontend/src/App.css
+@@ -1,70 +1,181 @@
+-.app-shell {
++/* ---------- Auth screen ---------- */
++.auth-shell {
++  min-height: 100vh;
+   display: flex;
+-  flex-direction: column;
+-  gap: 1.25rem;
++  align-items: center;
++  justify-content: center;
+   padding: 2rem;
+ }
+ 
+-.hero-card,
+-.summary-card,
+-.panel,
+-.toolbar {
+-  background: rgba(255, 255, 255, 0.92);
++.auth-card {
++  width: 100%;
++  max-width: 460px;
++  background: rgba(255, 255, 255, 0.95);
+   border: 1px solid var(--border);
+   border-radius: 1.25rem;
+   box-shadow: var(--shadow);
++  padding: 2.25rem;
++}
++
++.auth-card h1 {
++  font-size: 1.6rem;
++  margin: 0.5rem 0 0.75rem;
+ }
+ 
+-.hero-card {
++.auth-toggle {
+   display: flex;
+-  justify-content: space-between;
+-  gap: 1rem;
+-  padding: 2rem;
+-  align-items: center;
++  gap: 0.4rem;
++  margin: 1.4rem 0 1rem;
++  background: #f3f4f6;
++  padding: 0.3rem;
++  border-radius: 0.9rem;
+ }
+ 
+-.eyebrow {
+-  text-transform: uppercase;
+-  letter-spacing: 0.3em;
+-  font-size: 0.8rem;
+-  color: #2f7d32;
++.auth-toggle button {
++  flex: 1;
++  border: none;
++  background: transparent;
++  padding: 0.6rem 0.8rem;
++  border-radius: 0.7rem;
++  cursor: pointer;
++  color: #374151;
++  font-weight: 600;
++}
++
++.auth-toggle button.active {
++  background: #1b5e20;
++  color: white;
++}
++
++/* ---------- App shell: sidebar + main ---------- */
++.shell {
++  display: flex;
++  min-height: 100vh;
++}
++
++.sidebar {
++  width: 240px;
++  flex-shrink: 0;
++  background: #16241f;
++  color: #f0fdf4;
++  display: flex;
++  flex-direction: column;
++  padding: 1.5rem 1rem;
++  position: sticky;
++  top: 0;
++  height: 100vh;
++}
++
++.brand {
++  font-size: 1.15rem;
+   font-weight: 700;
++  padding: 0 0.5rem 1.5rem;
+ }
+ 
+-.hero-copy {
+-  max-width: 700px;
+-  margin-top: 0.75rem;
+-  color: #4b5563;
++.side-nav {
++  display: flex;
++  flex-direction: column;
++  gap: 0.3rem;
++  flex: 1;
+ }
+ 
+-.hero-panel {
++.side-nav button {
+   display: flex;
+-  flex-wrap: wrap;
+-  gap: 0.5rem;
++  align-items: center;
++  gap: 0.7rem;
++  border: none;
++  background: transparent;
++  color: #cfe8d6;
++  padding: 0.7rem 0.75rem;
++  border-radius: 0.75rem;
++  text-align: left;
++  cursor: pointer;
++  font-size: 0.95rem;
+ }
+ 
+-.chip {
+-  padding: 0.5rem 0.8rem;
+-  border-radius: 999px;
+-  background: #e8f5e9;
+-  color: #1b5e20;
++.side-nav button:hover {
++  background: rgba(255, 255, 255, 0.06);
++}
++
++.side-nav button.active {
++  background: #2e7d32;
++  color: white;
+   font-weight: 600;
+ }
+ 
+-.toolbar {
++.side-icon {
++  font-size: 1.05rem;
++}
++
++.sidebar-footer {
++  padding-top: 1rem;
++  border-top: 1px solid rgba(255, 255, 255, 0.12);
++}
++
++.xp-mini {
++  display: flex;
++  flex-direction: column;
++  gap: 0.4rem;
++  font-size: 0.85rem;
++  color: #cfe8d6;
++}
++
++.main {
++  flex: 1;
++  min-width: 0;
++  display: flex;
++  flex-direction: column;
++}
++
++.topbar {
+   display: flex;
+   justify-content: space-between;
+   align-items: center;
+-  padding: 1rem 1.2rem;
++  padding: 1.25rem 2rem;
++  background: rgba(255, 255, 255, 0.85);
++  border-bottom: 1px solid var(--border);
++  position: sticky;
++  top: 0;
++  z-index: 5;
+ }
+ 
+-.nav-tabs {
++.topbar p {
++  color: #6b7280;
++  font-size: 0.9rem;
++  margin-top: 0.15rem;
++}
++
++.content {
++  padding: 1.5rem 2rem 2.5rem;
+   display: flex;
+-  gap: 0.6rem;
+-  flex-wrap: wrap;
++  flex-direction: column;
++  gap: 1.25rem;
++}
++
++/* ---------- Shared surfaces ---------- */
++.panel,
++.summary-card {
++  background: rgba(255, 255, 255, 0.92);
++  border: 1px solid var(--border);
++  border-radius: 1.25rem;
++  box-shadow: var(--shadow);
++  padding: 1.2rem;
++}
++
++.eyebrow {
++  text-transform: uppercase;
++  letter-spacing: 0.3em;
++  font-size: 0.8rem;
++  color: #2f7d32;
++  font-weight: 700;
++}
++
++.hero-copy {
++  max-width: 700px;
++  margin-top: 0.75rem;
++  color: #4b5563;
+ }
+ 
+-.nav-tabs button,
+ .secondary-btn,
+ .stack-form button,
+ .copilot-form button {
+@@ -72,21 +183,15 @@
+   border-radius: 0.8rem;
+   padding: 0.75rem 1rem;
+   cursor: pointer;
++  background: #1b5e20;
++  color: white;
+ }
+ 
+-.nav-tabs button {
++.secondary-btn {
+   background: #f3f4f6;
+   color: #374151;
+ }
+ 
+-.nav-tabs button.active,
+-.secondary-btn,
+-.stack-form button,
+-.copilot-form button {
+-  background: #1b5e20;
+-  color: white;
+-}
+-
+ .summary-grid,
+ .content-grid {
+   display: grid;
+@@ -101,9 +206,8 @@
+   grid-template-columns: repeat(2, minmax(0, 1fr));
+ }
+ 
+-.summary-card,
+-.panel {
+-  padding: 1.2rem;
++.panel-wide {
++  grid-column: 1 / -1;
+ }
+ 
+ .summary-card h2 {
+@@ -128,6 +232,7 @@
+   justify-content: space-between;
+   align-items: center;
+   margin-bottom: 1rem;
++  gap: 0.5rem;
+ }
+ 
+ .panel-header span {
+@@ -135,6 +240,11 @@
+   font-size: 0.9rem;
+ }
+ 
++.muted {
++  color: #6b7280;
++  font-size: 0.9rem;
++}
++
+ .kpi-list,
+ .initiative-list,
+ .leaderboard-list,
+@@ -164,6 +274,15 @@
+   overflow: hidden;
+ }
+ 
++.bar-track-sm {
++  height: 0.4rem;
++}
++
++.bar-track-lg {
++  height: 1rem;
++  margin: 0.9rem 0 0.4rem;
++}
++
+ .bar-fill {
+   height: 100%;
+   border-radius: inherit;
+@@ -176,6 +295,22 @@
+   margin: 0;
+ }
+ 
++.leaderboard-list {
++  padding-left: 0;
++  list-style: none;
++}
++
++.leaderboard-list li {
++  display: flex;
++  justify-content: space-between;
++  padding: 0.5rem 0;
++  border-bottom: 1px solid #e5e7eb;
++}
++
++.leaderboard-list li:last-child {
++  border-bottom: none;
++}
++
+ .leaderboard-list li,
+ .initiative-list li,
+ .list-item {
+@@ -190,10 +325,13 @@
+ }
+ 
+ .stack-form input,
++.stack-form select,
+ .copilot-form input {
+   border: 1px solid #cbd5e1;
+   border-radius: 0.75rem;
+   padding: 0.75rem 0.85rem;
++  font-family: inherit;
++  font-size: 0.95rem;
+ }
+ 
+ .copilot-form {
+@@ -204,6 +342,27 @@
+   flex: 1;
+ }
+ 
++.quick-actions {
++  display: flex;
++  flex-direction: column;
++  gap: 0.6rem;
++}
++
++.quick-actions button {
++  text-align: left;
++  border: 1px solid var(--border);
++  background: #f8faf9;
++  border-radius: 0.85rem;
++  padding: 0.75rem 1rem;
++  cursor: pointer;
++  font-size: 0.95rem;
++  color: #16241f;
++}
++
++.quick-actions button:hover {
++  background: #eef5ee;
++}
++
+ .chat-panel {
+   display: flex;
+   flex-direction: column;
+@@ -260,7 +419,213 @@
+   border-bottom: 1px solid #e5e7eb;
+ }
+ 
+-@media (max-width: 900px) {
++.list-item-icon {
++  flex-direction: row;
++  align-items: center;
++  gap: 0.6rem;
++}
++
++/* ---------- Tables & cards ---------- */
++.table-wrap {
++  overflow-x: auto;
++}
++
++.data-table {
++  width: 100%;
++  border-collapse: collapse;
++  font-size: 0.92rem;
++}
++
++.data-table th {
++  text-align: left;
++  color: #6b7280;
++  font-weight: 600;
++  padding: 0.5rem 0.6rem;
++  border-bottom: 1px solid var(--border);
++}
++
++.data-table td {
++  padding: 0.6rem 0.6rem;
++  border-bottom: 1px solid #eef2ef;
++  color: #374151;
++}
++
++.status-pill {
++  display: inline-block;
++  padding: 0.2rem 0.6rem;
++  border-radius: 999px;
++  font-size: 0.78rem;
++  font-weight: 600;
++  text-transform: capitalize;
++  background: #f3f4f6;
++  color: #374151;
++}
++
++.status-active {
++  background: #e8f5e9;
++  color: #1b5e20;
++}
++
++.status-draft {
++  background: #f3f4f6;
++  color: #6b7280;
++}
++
++.status-retired {
++  background: #fef2f2;
++  color: #b91c1c;
++}
++
++.card-row {
++  display: grid;
++  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
++  gap: 0.85rem;
++}
++
++.mini-card {
++  display: flex;
++  flex-direction: column;
++  gap: 0.35rem;
++  padding: 0.9rem 1rem;
++  border: 1px solid var(--border);
++  border-radius: 1rem;
++  background: #fbfdfb;
++}
++
++/* ---------- Gamification ---------- */
++.xp-panel {
++  display: flex;
++  flex-direction: column;
++}
++
++.xp-header {
++  display: flex;
++  justify-content: space-between;
++  align-items: flex-end;
++}
++
++.xp-total {
++  font-weight: 700;
++  color: #1b5e20;
++  font-size: 1.1rem;
++}
++
++.badge-grid {
++  display: grid;
++  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
++  gap: 0.9rem;
++}
++
++.badge-card {
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  text-align: center;
++  gap: 0.4rem;
++  padding: 1.1rem 0.8rem;
++  border-radius: 1rem;
++  border: 1px solid var(--border);
++  background: #f8faf9;
++  opacity: 0.6;
++}
++
++.badge-card.unlocked {
++  opacity: 1;
++  background: linear-gradient(160deg, #e8f5e9, #f0fdf4);
++  border-color: #a5d6a7;
++}
++
++.badge-icon {
++  font-size: 1.8rem;
++}
++
++.challenge-card {
++  gap: 0.5rem;
++}
++
++.challenge-title {
++  display: flex;
++  align-items: center;
++  gap: 0.5rem;
++  font-size: 1rem;
++}
++
++.challenge-footer {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++  margin-top: 0.2rem;
++}
++
++.xp-chip {
++  background: #fff3cd;
++  color: #92700a;
++  font-weight: 700;
++  font-size: 0.78rem;
++  padding: 0.15rem 0.55rem;
++  border-radius: 999px;
++}
++
++/* ---------- Settings ---------- */
++.toggle-row {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++  gap: 1rem;
++  font-size: 0.92rem;
++  color: #374151;
++}
++
++.chip {
++  display: inline-block;
++  padding: 0.5rem 0.9rem;
++  border-radius: 999px;
++  background: #e8f5e9;
++  color: #1b5e20;
++  font-weight: 600;
++  margin: 0.2rem;
++}
++
++.report-panel ul {
++  margin-top: 0.75rem;
++}
++
++/* ---------- Responsive ---------- */
++@media (max-width: 960px) {
++  .shell {
++    flex-direction: column;
++  }
++
++  .sidebar {
++    width: 100%;
++    height: auto;
++    position: static;
++    flex-direction: row;
++    flex-wrap: wrap;
++    align-items: center;
++    gap: 0.5rem;
++  }
++
++  .brand {
++    padding-bottom: 0;
++  }
++
++  .side-nav {
++    flex-direction: row;
++    flex-wrap: wrap;
++  }
++
++  .sidebar-footer {
++    border-top: none;
++    padding-top: 0;
++  }
++
++  .content {
++    padding: 1.25rem;
++  }
++}
++
++@media (max-width: 700px) {
+   .summary-grid,
+   .content-grid,
+   .copilot-form {
+@@ -268,9 +633,9 @@
+     flex-direction: column;
+   }
+ 
+-  .hero-card,
+-  .toolbar {
++  .topbar {
+     flex-direction: column;
+     align-items: flex-start;
++    gap: 0.6rem;
+   }
+ }
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index c1d6c89..3afdf81 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -1,6 +1,8 @@
+ import { type FormEvent, useEffect, useState } from 'react'
+ import './App.css'
+ 
++const API_BASE = 'http://127.0.0.1:8000/api'
++
+ type SummaryCard = {
+   label: string
+   value: string
+@@ -63,6 +65,32 @@ type AnalyticsData = {
+   governance_health: number
+ }
+ 
++type Badge = {
++  name: string
++  icon: string
++  description: string
++  unlocked: boolean
++  progress?: number
++}
++
++type Challenge = {
++  name: string
++  icon: string
++  description: string
++  progress: number
++  reward_xp: number
++}
++
++type GamificationData = {
++  xp: number
++  level: number
++  xp_into_level: number
++  xp_per_level: number
++  badges: Badge[]
++  challenges: Challenge[]
++  leaderboard: LeaderboardEntry[]
++}
++
+ type User = {
+   id: number
+   name: string
+@@ -77,7 +105,7 @@ type ChatMessage = {
+   content: string
+ }
+ 
+-type View = 'dashboard' | 'carbon' | 'csr' | 'governance'
++type View = 'dashboard' | 'environmental' | 'social' | 'governance' | 'gamification' | 'reports' | 'settings'
+ 
+ type AuthState = {
+   isAuthenticated: boolean
+@@ -86,6 +114,16 @@ type AuthState = {
+   error: string
+ }
+ 
++const NAV_ITEMS: Array<{ key: View; label: string; icon: string }> = [
++  { key: 'dashboard', label: 'Dashboard', icon: '📊' },
++  { key: 'environmental', label: 'Environmental', icon: '🌱' },
++  { key: 'social', label: 'Social', icon: '👥' },
++  { key: 'governance', label: 'Governance', icon: '🏛' },
++  { key: 'gamification', label: 'Gamification', icon: '🏆' },
++  { key: 'reports', label: 'Reports', icon: '📈' },
++  { key: 'settings', label: 'Settings', icon: '⚙' },
++]
++
+ const fallbackData: DashboardData = {
+   summary: [
+     { label: 'Overall ESG Score', value: '84/100', delta: '+6%', tone: 'positive' },
+@@ -110,6 +148,29 @@ const fallbackData: DashboardData = {
+   ],
+ }
+ 
++const fallbackGamification: GamificationData = {
++  xp: 0,
++  level: 1,
++  xp_into_level: 0,
++  xp_per_level: 150,
++  badges: [
++    { name: 'ESG Rookie', icon: '🌱', description: 'Log your first ESG action', unlocked: false },
++    { name: 'Carbon Tracker', icon: '📉', description: 'Log 5+ carbon entries', unlocked: false, progress: 0 },
++    { name: 'Community Champion', icon: '🤝', description: 'Run 3+ CSR activities', unlocked: false, progress: 0 },
++    { name: 'Policy Guardian', icon: '🛡', description: 'Publish 2+ active policies', unlocked: false, progress: 0 },
++  ],
++  challenges: [
++    { name: 'Zero Waste Week', icon: '🌳', description: 'Log carbon data every day this week', progress: 0, reward_xp: 100 },
++    { name: 'Volunteer Sprint', icon: '🩸', description: 'Organize or join 3 CSR activities', progress: 0, reward_xp: 150 },
++    { name: 'Compliance Streak', icon: '🏛', description: 'Keep all policies active and up to date', progress: 0, reward_xp: 120 },
++  ],
++  leaderboard: [
++    { name: 'Operations', score: 92 },
++    { name: 'People & Culture', score: 88 },
++    { name: 'Supply Chain', score: 81 },
++  ],
++}
++
+ function App() {
+   const [view, setView] = useState<View>('dashboard')
+   const [dashboard, setDashboard] = useState<DashboardData>(fallbackData)
+@@ -118,17 +179,20 @@ function App() {
+   const [policies, setPolicies] = useState<Policy[]>([])
+   const [report, setReport] = useState<Report | null>(null)
+   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null)
++  const [gamification, setGamification] = useState<GamificationData>(fallbackGamification)
+   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+     { role: 'assistant', content: "Hi! I'm the EcoSphere AI Copilot. Ask me about emissions, CSR, compliance, or your ESG score." },
+   ])
+   const [chatInput, setChatInput] = useState('How can we improve our ESG score?')
+   const [isChatLoading, setIsChatLoading] = useState(false)
+   const [auth, setAuth] = useState<AuthState>({ isAuthenticated: false, token: null, user: null, error: '' })
++  const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+   const [loginForm, setLoginForm] = useState({ email: '', password: '' })
+   const [registerForm, setRegisterForm] = useState({ name: '', email: '', password: '', role: 'employee' })
+   const [carbonForm, setCarbonForm] = useState({ source: 'Electricity', amount: '320', unit: 'kWh', date: '2026-06-01' })
+   const [csrForm, setCsrForm] = useState({ title: 'Community Tree Planting', description: 'Planting trees with local volunteers', location: 'Abuja', organizer: 'Operations' })
+   const [policyForm, setPolicyForm] = useState({ title: 'Governance Charter', description: 'Updated compliance policy', version: 'v1.4', status: 'active' })
++  const [notifyOn, setNotifyOn] = useState(true)
+ 
+   useEffect(() => {
+     void loadDashboard()
+@@ -136,7 +200,7 @@ function App() {
+ 
+   const loadDashboard = async () => {
+     try {
+-      const response = await fetch('http://127.0.0.1:8000/api/dashboard')
++      const response = await fetch(`${API_BASE}/dashboard`)
+       if (response.ok) {
+         const data = (await response.json()) as DashboardData
+         setDashboard(data)
+@@ -148,12 +212,13 @@ function App() {
+ 
+   const loadModuleData = async () => {
+     try {
+-      const [carbonResponse, csrResponse, policyResponse, reportResponse, analyticsResponse] = await Promise.all([
+-        fetch('http://127.0.0.1:8000/api/carbon/analytics'),
+-        fetch('http://127.0.0.1:8000/api/csr/activities'),
+-        fetch('http://127.0.0.1:8000/api/governance/policies'),
+-        fetch('http://127.0.0.1:8000/api/reports/generate'),
+-        fetch('http://127.0.0.1:8000/api/reports/analytics'),
++      const [carbonResponse, csrResponse, policyResponse, reportResponse, analyticsResponse, gamificationResponse] = await Promise.all([
++        fetch(`${API_BASE}/carbon/analytics`),
++        fetch(`${API_BASE}/csr/activities`),
++        fetch(`${API_BASE}/governance/policies`),
++        fetch(`${API_BASE}/reports/generate`),
++        fetch(`${API_BASE}/reports/analytics`),
++        fetch(`${API_BASE}/gamification/summary`),
+       ])
+ 
+       if (carbonResponse.ok) {
+@@ -180,6 +245,13 @@ function App() {
+         const analyticsData = await analyticsResponse.json()
+         setAnalytics(analyticsData)
+       }
++
++      if (gamificationResponse.ok) {
++        const gamificationData = await gamificationResponse.json()
++        setGamification(gamificationData)
++      }
++
++      void loadDashboard()
+     } catch {
+       setAuth((current) => ({ ...current, error: 'Unable to load module data right now.' }))
+     }
+@@ -190,7 +262,7 @@ function App() {
+     setAuth((current) => ({ ...current, error: '' }))
+ 
+     try {
+-      const response = await fetch('http://127.0.0.1:8000/api/auth/login', {
++      const response = await fetch(`${API_BASE}/auth/login`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify(loginForm),
+@@ -218,7 +290,7 @@ function App() {
+     setAuth((current) => ({ ...current, error: '' }))
+ 
+     try {
+-      const response = await fetch('http://127.0.0.1:8000/api/auth/register', {
++      const response = await fetch(`${API_BASE}/auth/register`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify(registerForm),
+@@ -247,7 +319,7 @@ function App() {
+     setIsChatLoading(true)
+ 
+     try {
+-      const response = await fetch('http://127.0.0.1:8000/api/ai/chat', {
++      const response = await fetch(`${API_BASE}/ai/chat`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ messages: nextMessages }),
+@@ -274,7 +346,7 @@ function App() {
+   const handleCarbonSubmit = async (event: FormEvent) => {
+     event.preventDefault()
+     try {
+-      const response = await fetch('http://127.0.0.1:8000/api/carbon/log', {
++      const response = await fetch(`${API_BASE}/carbon/log`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ ...carbonForm, amount: Number(carbonForm.amount) }),
+@@ -291,7 +363,7 @@ function App() {
+   const handleCSRSubmit = async (event: FormEvent) => {
+     event.preventDefault()
+     try {
+-      const response = await fetch('http://127.0.0.1:8000/api/csr/activity', {
++      const response = await fetch(`${API_BASE}/csr/activity`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify(csrForm),
+@@ -308,7 +380,7 @@ function App() {
+   const handlePolicySubmit = async (event: FormEvent) => {
+     event.preventDefault()
+     try {
+-      const response = await fetch('http://127.0.0.1:8000/api/governance/policy', {
++      const response = await fetch(`${API_BASE}/governance/policy`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify(policyForm),
+@@ -322,309 +394,584 @@ function App() {
+     }
+   }
+ 
+-  return (
+-    <div className="app-shell">
+-      <header className="hero-card">
+-        <div>
++  // Recent activity feed derived from real records, newest first.
++  const recentActivity = [
++    ...carbonLogs.map((log) => ({
++      icon: '🏭',
++      text: `${log.amount} ${log.unit} of ${log.source} logged`,
++      key: `carbon-${log.id}`,
++    })),
++    ...csrActivities.map((item) => ({
++      icon: '✔',
++      text: `${item.organizer} launched '${item.title}'`,
++      key: `csr-${item.id}`,
++    })),
++    ...policies.map((item) => ({
++      icon: '📝',
++      text: `Policy '${item.title}' is ${item.status}`,
++      key: `policy-${item.id}`,
++    })),
++  ].slice(-6).reverse()
++
++  const xpPercentage = Math.min(100, Math.round((gamification.xp_into_level / gamification.xp_per_level) * 100))
++
++  // ---- Unauthenticated: centered auth card ----
++  if (!auth.isAuthenticated) {
++    return (
++      <div className="auth-shell">
++        <div className="auth-card">
+           <p className="eyebrow">EcoSphere AI</p>
+           <h1>Turn ESG reporting into a live operating system.</h1>
+           <p className="hero-copy">
+-            Track carbon, manage CSR, automate compliance, and surface AI-ready recommendations from one place.
++            Track carbon, manage CSR, automate compliance, and level up your team with built-in ESG gamification.
+           </p>
+-        </div>
+-        <div className="hero-panel">
+-          <span className="chip">Live dashboard</span>
+-          <span className="chip">AI copilots</span>
+-          <span className="chip">Predictive insights</span>
+-        </div>
+-      </header>
+ 
+-      <section className="toolbar panel">
+-        <div>
+-          <strong>{auth.user ? `Welcome back, ${auth.user.name}` : 'Access your ESG workspace'}</strong>
+-          <p>{auth.user ? auth.user.role : 'Sign in or create an account to continue.'}</p>
+-        </div>
+-        {!auth.isAuthenticated ? null : (
+-          <button className="secondary-btn" onClick={handleLogout}>Log out</button>
+-        )}
+-      </section>
+-
+-      {!auth.isAuthenticated ? (
+-        <section className="panel login-panel">
+-          <div className="panel-header">
+-            <h3>Sign in or create a role-based account</h3>
+-            <span>Admins, managers, employees, and auditors can each get a tailored workspace</span>
++          <div className="auth-toggle">
++            <button className={authMode === 'login' ? 'active' : ''} onClick={() => setAuthMode('login')}>Sign in</button>
++            <button className={authMode === 'register' ? 'active' : ''} onClick={() => setAuthMode('register')}>Create account</button>
+           </div>
+-          <form className="stack-form" onSubmit={handleLogin}>
+-            <input value={loginForm.email} onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })} placeholder="Email" />
+-            <input type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} placeholder="Password" />
+-            <button type="submit">Sign in</button>
+-          </form>
+-          <form className="stack-form" onSubmit={handleRegister}>
+-            <input value={registerForm.name} onChange={(event) => setRegisterForm({ ...registerForm, name: event.target.value })} placeholder="Full name" />
+-            <input value={registerForm.email} onChange={(event) => setRegisterForm({ ...registerForm, email: event.target.value })} placeholder="Email" />
+-            <input type="password" value={registerForm.password} onChange={(event) => setRegisterForm({ ...registerForm, password: event.target.value })} placeholder="Password" />
+-            <select value={registerForm.role} onChange={(event) => setRegisterForm({ ...registerForm, role: event.target.value })}>
+-              <option value="administrator">Administrator</option>
+-              <option value="esg_manager">ESG Manager</option>
+-              <option value="department_manager">Department Manager</option>
+-              <option value="employee">Employee</option>
+-              <option value="auditor">Auditor</option>
+-            </select>
+-            <button type="submit">Create account</button>
+-          </form>
++
++          {authMode === 'login' ? (
++            <form className="stack-form" onSubmit={handleLogin}>
++              <input value={loginForm.email} onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })} placeholder="Email" />
++              <input type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} placeholder="Password" />
++              <button type="submit">Sign in</button>
++            </form>
++          ) : (
++            <form className="stack-form" onSubmit={handleRegister}>
++              <input value={registerForm.name} onChange={(event) => setRegisterForm({ ...registerForm, name: event.target.value })} placeholder="Full name" />
++              <input value={registerForm.email} onChange={(event) => setRegisterForm({ ...registerForm, email: event.target.value })} placeholder="Email" />
++              <input type="password" value={registerForm.password} onChange={(event) => setRegisterForm({ ...registerForm, password: event.target.value })} placeholder="Password" />
++              <select value={registerForm.role} onChange={(event) => setRegisterForm({ ...registerForm, role: event.target.value })}>
++                <option value="administrator">Administrator</option>
++                <option value="esg_manager">ESG Manager</option>
++                <option value="department_manager">Department Manager</option>
++                <option value="employee">Employee</option>
++                <option value="auditor">Auditor</option>
++              </select>
++              <button type="submit">Create account</button>
++            </form>
++          )}
+           {auth.error ? <p className="error-text">{auth.error}</p> : null}
+-        </section>
+-      ) : null}
+-
+-      <nav className="nav-tabs">
+-        <button className={view === 'dashboard' ? 'active' : ''} onClick={() => setView('dashboard')}>Dashboard</button>
+-        <button className={view === 'carbon' ? 'active' : ''} onClick={() => setView('carbon')}>Carbon</button>
+-        <button className={view === 'csr' ? 'active' : ''} onClick={() => setView('csr')}>CSR</button>
+-        <button className={view === 'governance' ? 'active' : ''} onClick={() => setView('governance')}>Governance</button>
+-      </nav>
+-
+-      {report ? (
+-        <section className="panel report-panel">
+-          <div className="panel-header">
+-            <h3>{report.title}</h3>
+-            <span>{report.report_id}</span>
++        </div>
++      </div>
++    )
++  }
++
++  // ---- Authenticated: sidebar shell ----
++  return (
++    <div className="shell">
++      <aside className="sidebar">
++        <div className="brand">🌍 EcoSphere</div>
++        <nav className="side-nav">
++          {NAV_ITEMS.map((item) => (
++            <button
++              key={item.key}
++              className={view === item.key ? 'active' : ''}
++              onClick={() => setView(item.key)}
++            >
++              <span className="side-icon">{item.icon}</span>
++              {item.label}
++            </button>
++          ))}
++        </nav>
++        <div className="sidebar-footer">
++          <div className="xp-mini">
++            <span>Lvl {gamification.level}</span>
++            <div className="bar-track bar-track-sm">
++              <div className="bar-fill" style={{ width: `${xpPercentage}%` }} />
++            </div>
+           </div>
+-          <p>{report.summary}</p>
+-          <ul className="initiative-list">
+-            {report.recommendations.map((item) => (
+-              <li key={item}>{item}</li>
+-            ))}
+-          </ul>
+-        </section>
+-      ) : null}
+-
+-      {view === 'dashboard' ? (
+-        <>
+-          <section className="summary-grid">
+-            {dashboard.summary.map((card) => (
+-              <article className="summary-card" key={card.label}>
+-                <p>{card.label}</p>
+-                <h2>{card.value}</h2>
+-                <span className={`delta ${card.tone}`}>{card.delta}</span>
+-              </article>
+-            ))}
+-          </section>
+-
+-          <section className="content-grid">
+-            <div className="panel">
+-              <div className="panel-header">
+-                <h3>Performance snapshot</h3>
+-                <span>Quarterly goal tracking</span>
+-              </div>
+-              <div className="kpi-list">
+-                {dashboard.kpis.map((kpi) => {
+-                  const percentage = Math.round((kpi.value / kpi.target) * 100)
+-                  return (
+-                    <div className="kpi-item" key={kpi.name}>
+-                      <div className="kpi-row">
+-                        <strong>{kpi.name}</strong>
+-                        <span>{kpi.value}% / {kpi.target}%</span>
+-                      </div>
+-                      <div className="bar-track">
+-                        <div className="bar-fill" style={{ width: `${Math.min(percentage, 100)}%` }} />
++        </div>
++      </aside>
++
++      <div className="main">
++        <header className="topbar">
++          <div>
++            <strong>{NAV_ITEMS.find((item) => item.key === view)?.label}</strong>
++            <p>Welcome back, {auth.user?.name} · {auth.user?.role.replace('_', ' ')}</p>
++          </div>
++          <button className="secondary-btn" onClick={handleLogout}>Log out</button>
++        </header>
++
++        <div className="content">
++          {view === 'dashboard' ? (
++            <>
++              <section className="summary-grid">
++                {dashboard.summary.map((card) => (
++                  <article className="summary-card" key={card.label}>
++                    <p>{card.label}</p>
++                    <h2>{card.value}</h2>
++                    <span className={`delta ${card.tone}`}>{card.delta}</span>
++                  </article>
++                ))}
++              </section>
++
++              <section className="content-grid">
++                <div className="panel">
++                  <div className="panel-header">
++                    <h3>Performance snapshot</h3>
++                    <span>Quarterly goal tracking</span>
++                  </div>
++                  <div className="kpi-list">
++                    {dashboard.kpis.map((kpi) => {
++                      const percentage = Math.round((kpi.value / kpi.target) * 100)
++                      return (
++                        <div className="kpi-item" key={kpi.name}>
++                          <div className="kpi-row">
++                            <strong>{kpi.name}</strong>
++                            <span>{kpi.value}% / {kpi.target}%</span>
++                          </div>
++                          <div className="bar-track">
++                            <div className="bar-fill" style={{ width: `${Math.min(percentage, 100)}%` }} />
++                          </div>
++                        </div>
++                      )
++                    })}
++                  </div>
++                </div>
++
++                <div className="panel">
++                  <div className="panel-header">
++                    <h3>🕒 Recent activity</h3>
++                    <span>Latest logged records</span>
++                  </div>
++                  <div className="list-stack">
++                    {recentActivity.length ? (
++                      recentActivity.map((item) => (
++                        <div className="list-item list-item-icon" key={item.key}>
++                          <span>{item.icon}</span>
++                          <span>{item.text}</span>
++                        </div>
++                      ))
++                    ) : (
++                      <p className="muted">No activity yet — log a carbon entry or CSR activity to get started.</p>
++                    )}
++                  </div>
++                </div>
++              </section>
++
++              <section className="content-grid">
++                <div className="panel">
++                  <div className="panel-header">
++                    <h3>Department leaderboard</h3>
++                    <span>Momentum by team</span>
++                  </div>
++                  <ul className="leaderboard-list">
++                    {dashboard.leaderboard.map((entry) => (
++                      <li key={entry.name}>
++                        <span>{entry.name}</span>
++                        <strong>{entry.score}/100</strong>
++                      </li>
++                    ))}
++                  </ul>
++                </div>
++
++                <div className="panel">
++                  <div className="panel-header">
++                    <h3>⚡ Quick actions</h3>
++                    <span>Jump into a module</span>
++                  </div>
++                  <div className="quick-actions">
++                    <button onClick={() => setView('environmental')}>🏭 Log carbon data</button>
++                    <button onClick={() => setView('gamification')}>🏆 Start a challenge</button>
++                    <button onClick={() => setView('reports')}>📄 View reports</button>
++                  </div>
++                </div>
++              </section>
++
++              <section className="content-grid">
++                <div className="panel">
++                  <div className="panel-header">
++                    <h3>Priority initiatives</h3>
++                    <span>Recommended next steps</span>
++                  </div>
++                  <ul className="initiative-list">
++                    {dashboard.initiatives.map((item) => (
++                      <li key={item}>{item}</li>
++                    ))}
++                  </ul>
++                </div>
++
++                <div className="panel chat-panel">
++                  <div className="panel-header">
++                    <h3>AI Copilot</h3>
++                    <span>Chat about emissions, compliance, or CSR</span>
++                  </div>
++                  <div className="chat-history">
++                    {chatMessages.map((message, index) => (
++                      <div key={index} className={`chat-bubble chat-bubble-${message.role}`}>
++                        {message.content}
+                       </div>
++                    ))}
++                    {isChatLoading ? <div className="chat-bubble chat-bubble-assistant chat-bubble-loading">Thinking…</div> : null}
++                  </div>
++                  <form className="copilot-form" onSubmit={sendChatMessage}>
++                    <input
++                      value={chatInput}
++                      onChange={(event) => setChatInput(event.target.value)}
++                      placeholder="Ask about emissions, compliance, or CSR"
++                    />
++                    <button type="submit" disabled={isChatLoading || !chatInput.trim()}>
++                      {isChatLoading ? 'Thinking…' : 'Send'}
++                    </button>
++                  </form>
++                </div>
++              </section>
++            </>
++          ) : null}
++
++          {view === 'environmental' ? (
++            <section className="content-grid">
++              <div className="panel">
++                <div className="panel-header">
++                  <h3>📈 Emission trend</h3>
++                  <span>Rolling 3-month view</span>
++                </div>
++                <div className="list-stack">
++                  {analytics?.emissions_trend.map((item) => (
++                    <div className="list-item" key={item.month}>
++                      <strong>{item.month}</strong>
++                      <span>{item.value.toFixed(1)} tCO₂e</span>
+                     </div>
+-                  )
+-                })}
++                  ))}
++                </div>
+               </div>
+-            </div>
+-
+-            <div className="panel">
+-              <div className="panel-header">
+-                <h3>Priority initiatives</h3>
+-                <span>Recommended next steps</span>
++              <div className="panel">
++                <div className="panel-header">
++                  <h3>Log carbon data</h3>
++                  <span>Record a new activity</span>
++                </div>
++                <form className="stack-form" onSubmit={handleCarbonSubmit}>
++                  <input value={carbonForm.source} onChange={(event) => setCarbonForm({ ...carbonForm, source: event.target.value })} placeholder="Source" />
++                  <input value={carbonForm.amount} onChange={(event) => setCarbonForm({ ...carbonForm, amount: event.target.value })} placeholder="Amount" />
++                  <input value={carbonForm.unit} onChange={(event) => setCarbonForm({ ...carbonForm, unit: event.target.value })} placeholder="Unit" />
++                  <input value={carbonForm.date} onChange={(event) => setCarbonForm({ ...carbonForm, date: event.target.value })} placeholder="Date" />
++                  <button type="submit">Save log</button>
++                </form>
+               </div>
+-              <ul className="initiative-list">
+-                {dashboard.initiatives.map((item) => (
+-                  <li key={item}>{item}</li>
+-                ))}
+-              </ul>
+-            </div>
+-          </section>
+-
+-          <section className="content-grid">
+-            <div className="panel">
+-              <div className="panel-header">
+-                <h3>Department leaderboard</h3>
+-                <span>Momentum by team</span>
++              <div className="panel panel-wide">
++                <div className="panel-header">
++                  <h3>Carbon transactions</h3>
++                  <span>Stored records</span>
++                </div>
++                <div className="table-wrap">
++                  <table className="data-table">
++                    <thead>
++                      <tr>
++                        <th>Source</th>
++                        <th>Amount</th>
++                        <th>Unit</th>
++                        <th>Date</th>
++                      </tr>
++                    </thead>
++                    <tbody>
++                      {carbonLogs.map((item) => (
++                        <tr key={item.id}>
++                          <td>{item.source}</td>
++                          <td>{item.amount}</td>
++                          <td>{item.unit}</td>
++                          <td>{item.date}</td>
++                        </tr>
++                      ))}
++                      {!carbonLogs.length ? (
++                        <tr><td colSpan={4} className="muted">No carbon transactions logged yet.</td></tr>
++                      ) : null}
++                    </tbody>
++                  </table>
++                </div>
+               </div>
+-              <ul className="leaderboard-list">
+-                {dashboard.leaderboard.map((entry) => (
+-                  <li key={entry.name}>
+-                    <span>{entry.name}</span>
+-                    <strong>{entry.score}/100</strong>
+-                  </li>
+-                ))}
+-              </ul>
+-            </div>
+-
+-            <div className="panel chat-panel">
+-              <div className="panel-header">
+-                <h3>AI Copilot</h3>
+-                <span>Chat about emissions, compliance, or CSR</span>
++            </section>
++          ) : null}
++
++          {view === 'social' ? (
++            <section className="content-grid">
++              <div className="panel">
++                <div className="panel-header">
++                  <h3>Participation trend</h3>
++                  <span>Volunteer activity growth</span>
++                </div>
++                <div className="list-stack">
++                  {analytics?.csr_trend.map((item) => (
++                    <div className="list-item" key={item.month}>
++                      <strong>{item.month}</strong>
++                      <span>{item.value}% participation</span>
++                    </div>
++                  ))}
++                </div>
+               </div>
+-              <div className="chat-history">
+-                {chatMessages.map((message, index) => (
+-                  <div key={index} className={`chat-bubble chat-bubble-${message.role}`}>
+-                    {message.content}
+-                  </div>
+-                ))}
+-                {isChatLoading ? <div className="chat-bubble chat-bubble-assistant chat-bubble-loading">Thinking…</div> : null}
++              <div className="panel">
++                <div className="panel-header">
++                  <h3>+ New activity</h3>
++                  <span>Engage employees in impact work</span>
++                </div>
++                <form className="stack-form" onSubmit={handleCSRSubmit}>
++                  <input value={csrForm.title} onChange={(event) => setCsrForm({ ...csrForm, title: event.target.value })} placeholder="Title" />
++                  <input value={csrForm.description} onChange={(event) => setCsrForm({ ...csrForm, description: event.target.value })} placeholder="Description" />
++                  <input value={csrForm.location} onChange={(event) => setCsrForm({ ...csrForm, location: event.target.value })} placeholder="Location" />
++                  <input value={csrForm.organizer} onChange={(event) => setCsrForm({ ...csrForm, organizer: event.target.value })} placeholder="Organizer" />
++                  <button type="submit">Publish activity</button>
++                </form>
+               </div>
+-              <form className="copilot-form" onSubmit={sendChatMessage}>
+-                <input
+-                  value={chatInput}
+-                  onChange={(event) => setChatInput(event.target.value)}
+-                  placeholder="Ask about emissions, compliance, or CSR"
+-                />
+-                <button type="submit" disabled={isChatLoading || !chatInput.trim()}>
+-                  {isChatLoading ? 'Thinking…' : 'Send'}
+-                </button>
+-              </form>
+-            </div>
+-          </section>
+-        </>
+-      ) : null}
+-
+-      {view === 'carbon' ? (
+-        <section className="content-grid">
+-          <div className="panel">
+-            <div className="panel-header">
+-              <h3>Emission trend</h3>
+-              <span>Rolling 3-month view</span>
+-            </div>
+-            <div className="list-stack">
+-              {analytics?.emissions_trend.map((item) => (
+-                <div className="list-item" key={item.month}>
+-                  <strong>{item.month}</strong>
+-                  <span>{item.value.toFixed(1)} tCO₂e</span>
++              <div className="panel panel-wide">
++                <div className="panel-header">
++                  <h3>CSR activity feed</h3>
++                  <span>Recent community work</span>
+                 </div>
+-              ))}
+-            </div>
+-          </div>
+-          <div className="panel">
+-            <div className="panel-header">
+-              <h3>Carbon log</h3>
+-              <span>Add a new activity</span>
+-            </div>
+-            <form className="stack-form" onSubmit={handleCarbonSubmit}>
+-              <input value={carbonForm.source} onChange={(event) => setCarbonForm({ ...carbonForm, source: event.target.value })} placeholder="Source" />
+-              <input value={carbonForm.amount} onChange={(event) => setCarbonForm({ ...carbonForm, amount: event.target.value })} placeholder="Amount" />
+-              <input value={carbonForm.unit} onChange={(event) => setCarbonForm({ ...carbonForm, unit: event.target.value })} placeholder="Unit" />
+-              <input value={carbonForm.date} onChange={(event) => setCarbonForm({ ...carbonForm, date: event.target.value })} placeholder="Date" />
+-              <button type="submit">Save log</button>
+-            </form>
+-          </div>
+-          <div className="panel">
+-            <div className="panel-header">
+-              <h3>Recent carbon entries</h3>
+-              <span>Stored records</span>
+-            </div>
+-            <div className="list-stack">
+-              {carbonLogs.map((item) => (
+-                <div className="list-item" key={item.id}>
+-                  <strong>{item.source}</strong>
+-                  <span>{item.amount} {item.unit} • {item.date}</span>
++                <div className="card-row">
++                  {csrActivities.map((item) => (
++                    <div className="mini-card" key={item.id}>
++                      <strong>{item.title}</strong>
++                      <span>{item.description}</span>
++                      <span className="muted">{item.location} • {item.organizer}</span>
++                    </div>
++                  ))}
++                  {!csrActivities.length ? <p className="muted">No CSR activities published yet.</p> : null}
+                 </div>
+-              ))}
+-            </div>
+-          </div>
+-        </section>
+-      ) : null}
+-
+-      {view === 'csr' ? (
+-        <section className="content-grid">
+-          <div className="panel">
+-            <div className="panel-header">
+-              <h3>Participation trend</h3>
+-              <span>Volunteer activity growth</span>
+-            </div>
+-            <div className="list-stack">
+-              {analytics?.csr_trend.map((item) => (
+-                <div className="list-item" key={item.month}>
+-                  <strong>{item.month}</strong>
+-                  <span>{item.value}% participation</span>
++              </div>
++            </section>
++          ) : null}
++
++          {view === 'governance' ? (
++            <section className="content-grid">
++              <div className="panel">
++                <div className="panel-header">
++                  <h3>Governance health</h3>
++                  <span>Current compliance pulse</span>
+                 </div>
+-              ))}
+-            </div>
+-          </div>
+-          <div className="panel">
+-            <div className="panel-header">
+-              <h3>Create CSR activity</h3>
+-              <span>Engage employees in impact work</span>
+-            </div>
+-            <form className="stack-form" onSubmit={handleCSRSubmit}>
+-              <input value={csrForm.title} onChange={(event) => setCsrForm({ ...csrForm, title: event.target.value })} placeholder="Title" />
+-              <input value={csrForm.description} onChange={(event) => setCsrForm({ ...csrForm, description: event.target.value })} placeholder="Description" />
+-              <input value={csrForm.location} onChange={(event) => setCsrForm({ ...csrForm, location: event.target.value })} placeholder="Location" />
+-              <input value={csrForm.organizer} onChange={(event) => setCsrForm({ ...csrForm, organizer: event.target.value })} placeholder="Organizer" />
+-              <button type="submit">Publish activity</button>
+-            </form>
+-          </div>
+-          <div className="panel">
+-            <div className="panel-header">
+-              <h3>CSR activity feed</h3>
+-              <span>Recent community work</span>
+-            </div>
+-            <div className="list-stack">
+-              {csrActivities.map((item) => (
+-                <div className="list-item" key={item.id}>
+-                  <strong>{item.title}</strong>
+-                  <span>{item.location} • {item.organizer}</span>
++                <div className="list-item">
++                  <strong>{analytics?.governance_health ?? 0}%</strong>
++                  <span>Overall governance readiness</span>
+                 </div>
+-              ))}
+-            </div>
+-          </div>
+-        </section>
+-      ) : null}
+-
+-      {view === 'governance' ? (
+-        <section className="content-grid">
+-          <div className="panel">
+-            <div className="panel-header">
+-              <h3>Governance health</h3>
+-              <span>Current compliance pulse</span>
+-            </div>
+-            <div className="list-item">
+-              <strong>{analytics?.governance_health ?? 0}%</strong>
+-              <span>Overall governance readiness</span>
+-            </div>
+-          </div>
+-          <div className="panel">
+-            <div className="panel-header">
+-              <h3>Publish policy</h3>
+-              <span>Keep governance updated</span>
+-            </div>
+-            <form className="stack-form" onSubmit={handlePolicySubmit}>
+-              <input value={policyForm.title} onChange={(event) => setPolicyForm({ ...policyForm, title: event.target.value })} placeholder="Title" />
+-              <input value={policyForm.description} onChange={(event) => setPolicyForm({ ...policyForm, description: event.target.value })} placeholder="Description" />
+-              <input value={policyForm.version} onChange={(event) => setPolicyForm({ ...policyForm, version: event.target.value })} placeholder="Version" />
+-              <input value={policyForm.status} onChange={(event) => setPolicyForm({ ...policyForm, status: event.target.value })} placeholder="Status" />
+-              <button type="submit">Publish policy</button>
+-            </form>
+-          </div>
+-          <div className="panel">
+-            <div className="panel-header">
+-              <h3>Policy register</h3>
+-              <span>Current governance documents</span>
+-            </div>
+-            <div className="list-stack">
+-              {policies.map((item) => (
+-                <div className="list-item" key={item.id}>
+-                  <strong>{item.title}</strong>
+-                  <span>{item.version} • {item.status}</span>
++              </div>
++              <div className="panel">
++                <div className="panel-header">
++                  <h3>Publish policy</h3>
++                  <span>Keep governance updated</span>
+                 </div>
+-              ))}
+-            </div>
+-          </div>
+-        </section>
+-      ) : null}
++                <form className="stack-form" onSubmit={handlePolicySubmit}>
++                  <input value={policyForm.title} onChange={(event) => setPolicyForm({ ...policyForm, title: event.target.value })} placeholder="Title" />
++                  <input value={policyForm.description} onChange={(event) => setPolicyForm({ ...policyForm, description: event.target.value })} placeholder="Description" />
++                  <input value={policyForm.version} onChange={(event) => setPolicyForm({ ...policyForm, version: event.target.value })} placeholder="Version" />
++                  <select value={policyForm.status} onChange={(event) => setPolicyForm({ ...policyForm, status: event.target.value })}>
++                    <option value="draft">Draft</option>
++                    <option value="active">Active</option>
++                    <option value="retired">Retired</option>
++                  </select>
++                  <button type="submit">Publish policy</button>
++                </form>
++              </div>
++              <div className="panel panel-wide">
++                <div className="panel-header">
++                  <h3>Policy register</h3>
++                  <span>Current governance documents</span>
++                </div>
++                <div className="table-wrap">
++                  <table className="data-table">
++                    <thead>
++                      <tr>
++                        <th>Title</th>
++                        <th>Version</th>
++                        <th>Status</th>
++                      </tr>
++                    </thead>
++                    <tbody>
++                      {policies.map((item) => (
++                        <tr key={item.id}>
++                          <td>{item.title}</td>
++                          <td>{item.version}</td>
++                          <td><span className={`status-pill status-${item.status}`}>{item.status}</span></td>
++                        </tr>
++                      ))}
++                      {!policies.length ? (
++                        <tr><td colSpan={3} className="muted">No policies published yet.</td></tr>
++                      ) : null}
++                    </tbody>
++                  </table>
++                </div>
++              </div>
++            </section>
++          ) : null}
++
++          {view === 'gamification' ? (
++            <>
++              <section className="panel xp-panel">
++                <div className="xp-header">
++                  <div>
++                    <p className="eyebrow">Your progress</p>
++                    <h2>Level {gamification.level}</h2>
++                  </div>
++                  <div className="xp-total">{gamification.xp} XP total</div>
++                </div>
++                <div className="bar-track bar-track-lg">
++                  <div className="bar-fill" style={{ width: `${xpPercentage}%` }} />
++                </div>
++                <span className="muted">{gamification.xp_into_level} / {gamification.xp_per_level} XP to level {gamification.level + 1}</span>
++              </section>
++
++              <section className="content-grid">
++                <div className="panel panel-wide">
++                  <div className="panel-header">
++                    <h3>🏆 Badges</h3>
++                    <span>Unlocked by real ESG activity</span>
++                  </div>
++                  <div className="badge-grid">
++                    {gamification.badges.map((badge) => (
++                      <div className={`badge-card ${badge.unlocked ? 'unlocked' : ''}`} key={badge.name}>
++                        <span className="badge-icon">{badge.icon}</span>
++                        <strong>{badge.name}</strong>
++                        <span className="muted">{badge.description}</span>
++                        {badge.progress !== undefined && !badge.unlocked ? (
++                          <div className="bar-track bar-track-sm">
++                            <div className="bar-fill" style={{ width: `${badge.progress}%` }} />
++                          </div>
++                        ) : (
++                          <span className={`status-pill ${badge.unlocked ? 'status-active' : 'status-draft'}`}>
++                            {badge.unlocked ? 'Unlocked' : 'Locked'}
++                          </span>
++                        )}
++                      </div>
++                    ))}
++                  </div>
++                </div>
++              </section>
++
++              <section className="content-grid">
++                <div className="panel panel-wide">
++                  <div className="panel-header">
++                    <h3>Active challenges</h3>
++                    <span>Complete for bonus XP</span>
++                  </div>
++                  <div className="card-row">
++                    {gamification.challenges.map((challenge) => (
++                      <div className="mini-card challenge-card" key={challenge.name}>
++                        <div className="challenge-title">
++                          <span>{challenge.icon}</span>
++                          <strong>{challenge.name}</strong>
++                        </div>
++                        <span className="muted">{challenge.description}</span>
++                        <div className="bar-track bar-track-sm">
++                          <div className="bar-fill" style={{ width: `${challenge.progress}%` }} />
++                        </div>
++                        <div className="challenge-footer">
++                          <span className="muted">{challenge.progress}% complete</span>
++                          <span className="xp-chip">+{challenge.reward_xp} XP</span>
++                        </div>
++                      </div>
++                    ))}
++                  </div>
++                </div>
++
++                <div className="panel">
++                  <div className="panel-header">
++                    <h3>Leaderboard</h3>
++                    <span>Top teams this quarter</span>
++                  </div>
++                  <ul className="leaderboard-list">
++                    {gamification.leaderboard.map((entry, index) => (
++                      <li key={entry.name}>
++                        <span>{index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `#${index + 1}`} {entry.name}</span>
++                        <strong>{entry.score}/100</strong>
++                      </li>
++                    ))}
++                  </ul>
++                </div>
++              </section>
++            </>
++          ) : null}
++
++          {view === 'reports' ? (
++            <>
++              {report ? (
++                <section className="panel report-panel">
++                  <div className="panel-header">
++                    <h3>{report.title}</h3>
++                    <span>{report.report_id}</span>
++                  </div>
++                  <p>{report.summary}</p>
++                  <ul className="initiative-list">
++                    {report.recommendations.map((item) => (
++                      <li key={item}>{item}</li>
++                    ))}
++                  </ul>
++                </section>
++              ) : (
++                <section className="panel">
++                  <p className="muted">No report generated yet.</p>
++                </section>
++              )}
++              <section className="content-grid">
++                <div className="panel">
++                  <div className="panel-header">
++                    <h3>Emissions trend</h3>
++                    <span>Environmental report</span>
++                  </div>
++                  <div className="list-stack">
++                    {analytics?.emissions_trend.map((item) => (
++                      <div className="list-item" key={item.month}>
++                        <strong>{item.month}</strong>
++                        <span>{item.value.toFixed(1)} tCO₂e</span>
++                      </div>
++                    ))}
++                  </div>
++                </div>
++                <div className="panel">
++                  <div className="panel-header">
++                    <h3>CSR participation trend</h3>
++                    <span>Social report</span>
++                  </div>
++                  <div className="list-stack">
++                    {analytics?.csr_trend.map((item) => (
++                      <div className="list-item" key={item.month}>
++                        <strong>{item.month}</strong>
++                        <span>{item.value}% participation</span>
++                      </div>
++                    ))}
++                  </div>
++                </div>
++              </section>
++            </>
++          ) : null}
++
++          {view === 'settings' ? (
++            <section className="content-grid">
++              <div className="panel">
++                <div className="panel-header">
++                  <h3>Profile</h3>
++                  <span>Your account details</span>
++                </div>
++                <div className="list-stack">
++                  <div className="list-item"><strong>Name</strong><span>{auth.user?.name}</span></div>
++                  <div className="list-item"><strong>Email</strong><span>{auth.user?.email}</span></div>
++                  <div className="list-item"><strong>Role</strong><span>{auth.user?.role}</span></div>
++                  <div className="list-item"><strong>Department</strong><span>{auth.user?.department ?? 'Unassigned'}</span></div>
++                </div>
++              </div>
++              <div className="panel">
++                <div className="panel-header">
++                  <h3>Notifications</h3>
++                  <span>Manage alert preferences</span>
++                </div>
++                <label className="toggle-row">
++                  <span>Email me about new compliance issues and challenges</span>
++                  <input type="checkbox" checked={notifyOn} onChange={(event) => setNotifyOn(event.target.checked)} />
++                </label>
++              </div>
++              <div className="panel panel-wide">
++                <div className="panel-header">
++                  <h3>ESG configuration</h3>
++                  <span>Departments &amp; categories tracked in this workspace</span>
++                </div>
++                <div className="card-row">
++                  {['Sales', 'Manufacturing', 'Logistics', 'Corporate', 'R&D'].map((dept) => (
++                    <span className="chip" key={dept}>{dept}</span>
++                  ))}
++                </div>
++              </div>
++            </section>
++          ) : null}
++        </div>
++      </div>
+     </div>
+   )
+ }
