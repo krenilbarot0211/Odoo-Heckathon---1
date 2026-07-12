@@ -1,41 +1,77 @@
-# Odoo Hackathon
+# EcoSphere AI
 
-This is the repo for our Odoo hackathon virtual round.
+EcoSphere AI is a full-stack ESG management MVP that helps organizations track carbon, manage CSR initiatives, monitor governance policies, and surface AI-driven recommendations from a single workspace.
 
-**Team:** Krenil Barot, Rahul Patel
+## Features
 
-Full-stack application with a FastAPI backend and frontend.
+- Role-based authentication for Administrator, ESG Manager, Department Manager, Employee, and Auditor
+- Carbon tracking and emissions insights
+- CSR activity management
+- Governance policy publishing and tracking
+- AI copilot-style guidance for ESG questions
+- Report and analytics summaries for executive review
+
+## Tech Stack
+
+- Backend: FastAPI, SQLAlchemy, Pydantic, SQLite
+- Frontend: React, TypeScript, Vite
+- Auth: JWT-based role-aware authentication
 
 ## Project Structure
 
-```
-├── backend/          # FastAPI application
-├── frontend/         # Frontend application
-├── docker-compose.yml
-└── README.md
+```text
+backend/        # FastAPI backend and API routes
+frontend/       # React + TypeScript frontend
+Dockerfile      # Backend container setup
+docker-compose.yml
+README.md
 ```
 
 ## Getting Started
 
-### Backend (local)
+### 1. Backend
 
 ```bash
 cd backend
 python -m venv .venv
 .venv\Scripts\activate   # Windows
 pip install -r requirements.txt
-cp .env.example .env     # if .env does not exist
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-API docs: http://localhost:8000/docs
+The API will be available at:
+- http://127.0.0.1:8000/docs
+- http://127.0.0.1:8000/health
 
-### Docker
+### 2. Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev -- --host 0.0.0.0
+```
+
+Open the app at:
+- http://localhost:5173/
+
+### 3. Docker
 
 ```bash
 docker compose up --build
 ```
 
-## Environment Variables
+## Authentication
 
-Copy `backend/.env.example` to `backend/.env` and update values as needed.
+Users can sign up with a selected role and sign in to access a tailored workspace. The backend returns a JWT and role-based permissions for each account.
+
+## Testing
+
+```bash
+cd backend
+python -m pytest -q tests/test_auth_roles.py
+```
+
+## Notes
+
+- The current MVP uses SQLite for local development.
+- The app is designed to be extended with PostgreSQL, production auth, and richer analytics in later iterations.
