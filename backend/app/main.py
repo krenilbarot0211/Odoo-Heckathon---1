@@ -2,6 +2,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from app.api import router as api_router
+from app.services.esg_store import store
+
 app = FastAPI(title="EcoSphere AI API", version="0.1.0")
 
 app.add_middleware(
@@ -17,6 +20,9 @@ class CopilotRequest(BaseModel):
     prompt: str
 
 
+app.include_router(api_router)
+
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "service": "ecosphere-ai"}
@@ -24,29 +30,13 @@ async def health_check():
 
 @app.get("/api/dashboard")
 async def dashboard_data():
-    return {
-        "summary": [
-            {"label": "Overall ESG Score", "value": "84/100", "delta": "+6%", "tone": "positive"},
-            {"label": "Carbon Emissions", "value": "12.4 tCO₂e", "delta": "-8%", "tone": "positive"},
-            {"label": "CSR Participation", "value": "78%", "delta": "+12%", "tone": "positive"},
-            {"label": "Governance Status", "value": "Compliant", "delta": "On track", "tone": "neutral"},
-        ],
-        "kpis": [
-            {"name": "Energy Efficiency", "value": 82, "target": 90},
-            {"name": "Volunteer Hours", "value": 71, "target": 85},
-            {"name": "Policy Acknowledgement", "value": 96, "target": 100},
-        ],
-        "initiatives": [
-            "Install rooftop solar panels across two sites",
-            "Launch a city cleanup challenge for regional teams",
-            "Automate compliance reminders for policy renewals",
-        ],
-        "leaderboard": [
-            {"name": "Operations", "score": 92},
-            {"name": "People & Culture", "score": 88},
-            {"name": "Supply Chain", "score": 81},
-        ],
-    }
+    data = store.get_dashboard_data()
+    data["leaderboard"] = [
+        {"name": "Operations", "score": 92},
+        {"name": "People & Culture", "score": 88},
+        {"name": "Supply Chain", "score": 81},
+    ]
+    return data
 
 
 @app.post("/api/ai/copilot")
