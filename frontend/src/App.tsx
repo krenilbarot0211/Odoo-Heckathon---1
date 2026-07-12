@@ -50,6 +50,19 @@ type Policy = {
   status: string
 }
 
+type Report = {
+  report_id: string
+  title: string
+  summary: string
+  recommendations: string[]
+}
+
+type AnalyticsData = {
+  emissions_trend: Array<{ month: string; value: number }>
+  csr_trend: Array<{ month: string; value: number }>
+  governance_health: number
+}
+
 type User = {
   id: number
   name: string
@@ -97,6 +110,8 @@ function App() {
   const [carbonLogs, setCarbonLogs] = useState<CarbonLog[]>([])
   const [csrActivities, setCsrActivities] = useState<CSRActivity[]>([])
   const [policies, setPolicies] = useState<Policy[]>([])
+  const [report, setReport] = useState<Report | null>(null)
+  const [analytics, setAnalytics] = useState<AnalyticsData | null>(null)
   const [prompt, setPrompt] = useState('How can we improve our ESG score?')
   const [reply, setReply] = useState('AI suggestions will appear here as soon as the backend responds.')
   const [isLoading, setIsLoading] = useState(false)
@@ -124,10 +139,12 @@ function App() {
 
   const loadModuleData = async () => {
     try {
-      const [carbonResponse, csrResponse, policyResponse] = await Promise.all([
+      const [carbonResponse, csrResponse, policyResponse, reportResponse, analyticsResponse] = await Promise.all([
         fetch('http://127.0.0.1:8000/api/carbon/analytics'),
         fetch('http://127.0.0.1:8000/api/csr/activities'),
         fetch('http://127.0.0.1:8000/api/governance/policies'),
+        fetch('http://127.0.0.1:8000/api/reports/generate'),
+        fetch('http://127.0.0.1:8000/api/reports/analytics'),
       ])
 
       if (carbonResponse.ok) {
@@ -143,6 +160,16 @@ function App() {
       if (policyResponse.ok) {
         const policyData = await policyResponse.json()
         setPolicies(policyData ?? [])
+      }
+
+      if (reportResponse.ok) {
+        const reportData = await reportResponse.json()
+        setReport(reportData)
+      }
+
+      if (analyticsResponse.ok) {
+        const analyticsData = await analyticsResponse.json()
+        setAnalytics(analyticsData)
       }
     } catch {
       setAuth((current) => ({ ...current, error: 'Unable to load module data right now.' }))
@@ -301,6 +328,21 @@ function App() {
         <button className={view === 'governance' ? 'active' : ''} onClick={() => setView('governance')}>Governance</button>
       </nav>
 
+      {report ? (
+        <section className="panel report-panel">
+          <div className="panel-header">
+            <h3>{report.title}</h3>
+            <span>{report.report_id}</span>
+          </div>
+          <p>{report.summary}</p>
+          <ul className="initiative-list">
+            {report.recommendations.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       {view === 'dashboard' ? (
         <>
           <section className="summary-grid">
@@ -387,6 +429,20 @@ function App() {
         <section className="content-grid">
           <div className="panel">
             <div className="panel-header">
+              <h3>Emission trend</h3>
+              <span>Rolling 3-month view</span>
+            </div>
+            <div className="list-stack">
+              {analytics?.emissions_trend.map((item) => (
+                <div className="list-item" key={item.month}>
+                  <strong>{item.month}</strong>
+                  <span>{item.value.toFixed(1)} tCO₂e</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="panel">
+            <div className="panel-header">
               <h3>Carbon log</h3>
               <span>Add a new activity</span>
             </div>
@@ -419,6 +475,20 @@ function App() {
         <section className="content-grid">
           <div className="panel">
             <div className="panel-header">
+              <h3>Participation trend</h3>
+              <span>Volunteer activity growth</span>
+            </div>
+            <div className="list-stack">
+              {analytics?.csr_trend.map((item) => (
+                <div className="list-item" key={item.month}>
+                  <strong>{item.month}</strong>
+                  <span>{item.value}% participation</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="panel">
+            <div className="panel-header">
               <h3>Create CSR activity</h3>
               <span>Engage employees in impact work</span>
             </div>
@@ -449,6 +519,16 @@ function App() {
 
       {view === 'governance' ? (
         <section className="content-grid">
+          <div className="panel">
+            <div className="panel-header">
+              <h3>Governance health</h3>
+              <span>Current compliance pulse</span>
+            </div>
+            <div className="list-item">
+              <strong>{analytics?.governance_health ?? 0}%</strong>
+              <span>Overall governance readiness</span>
+            </div>
+          </div>
           <div className="panel">
             <div className="panel-header">
               <h3>Publish policy</h3>
